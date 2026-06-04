@@ -5,13 +5,67 @@ import edu.udla.integracion.progreso2.model.CitaRequest;
 import edu.udla.integracion.progreso2.model.BillingMessage;
 import org.apache.camel.model.dataformat.JsonLibrary;
 import org.apache.camel.builder.RouteBuilder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 public class CitaIntegrationRoute extends RouteBuilder {
 
+    @Value("${citas.path.auditoria-csv}")
+    private String auditoriaCsvPath;
+
+    @Value("${citas.path.rechazadas-log}")
+    private String rechazadasLogPath;
+
     @Override
     public void configure() throws Exception {
+        // Extraer directorio y nombre de archivo para el componente file de Camel
+        int lastSlash = auditoriaCsvPath.lastIndexOf('/');
+        if (lastSlash == -1) {
+            lastSlash = auditoriaCsvPath.lastIndexOf('\\');
+        }
+        String dir = lastSlash != -1 ? auditoriaCsvPath.substring(0, lastSlash) : "data/outbox";
+        String fileName = lastSlash != -1 ? auditoriaCsvPath.substring(lastSlash + 1) : "auditoria-citas.csv";
+
+        // Extraer directorio y nombre de archivo para el log de errores
+        int lastSlashError = rechazadasLogPath.lastIndexOf('/');
+        if (lastSlashError == -1) {
+            lastSlashError = rechazadasLogPath.lastIndexOf('\\');
+        }
+        String errorDir = lastSlashError != -1 ? rechazadasLogPath.substring(0, lastSlashError) : "data/errors";
+        String errorFileName = lastSlashError != -1 ? rechazadasLogPath.substring(lastSlashError + 1) : "citas-rechazadas.log";
+
+        // =========================================================================
+        // RF5: Manejo básico de errores a nivel de Camel
+        // =========================================================================
+        onException(Exception.class)
+            .handled(true)
+            .maximumRedeliveries(2)
+            .redeliveryDelay(1000)
+            .log(org.apache.camel.LoggingLevel.ERROR, "Error procesando cita: ${exception.message}")
+            .process(exchange -> {
+                Exception cause = exchange.getProperty(org.apache.camel.Exchange.EXCEPTION_CAUGHT, Exception.class);
+                String exceptionMsg = cause != null ? cause.getMessage() : "Error desconocido";
+
+                Object bodyObj = exchange.getProperty("originalRequest");
+                if (bodyObj == null) {
+                    bodyObj = exchange.getIn().getBody();
+                }
+
+                String payloadStr = bodyObj != null ? bodyObj.toString() : "null";
+                String idCita = "N/A";
+                if (bodyObj instanceof CitaRequest) {
+                    idCita = ((CitaRequest) bodyObj).getIdCita();
+                }
+
+                String timestamp = java.time.LocalDateTime.now().toString();
+                String errorLogLine = String.format("[%s] | idCita=%s | motivo=%s | payload=%s%n",
+                        timestamp, idCita, exceptionMsg, payloadStr);
+
+                exchange.getIn().setBody(errorLogLine);
+            })
+            .to("file:" + errorDir + "?fileName=" + errorFileName + "&fileExist=Append");
+
         from("direct:startIntegration")
             .routeId("citaIntegrationRoute")
             .log("Procesando cita recibida: ${body}")
@@ -61,10 +115,24 @@ public class CitaIntegrationRoute extends RouteBuilder {
             // Restaurar el payload original en el body para las siguientes etapas
             .setBody(exchangeProperty("originalRequest"))
 
-            // TODO: Escribir la cita en formato CSV en la ruta local configurada:
-            // Path: 'data/outbox/auditoria-citas.csv'
-            
             // =========================================================================
+            // RF4: Integración con sistema legado mediante archivo CSV
+            // =========================================================================
+            .process(exchange -> {
+                CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
+                String csvLine = String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
+                        req.getIdCita(),
+                        req.getPaciente(),
+                        req.getCorreo(),
+                        req.getEspecialidad(),
+                        req.getFechaCita(),
+                        req.getSede(),
+                        req.getValor()
+                );
+                exchange.getIn().setBody(csvLine);
+            })
+            .to("file:" + dir + "?fileName=" + fileName + "&fileExist=Append")
+            .log("Registro de cita escrito exitosamente en el archivo CSV de auditoría.")
 
             .end();
     }
