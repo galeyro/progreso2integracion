@@ -126,7 +126,15 @@ public class CitaIntegrationRoute extends RouteBuilder {
             .routeId("csvAuditSubRoute")
             .process(exchange -> {
                 CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
-                String csvLine = String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
+
+                // Verificar si el archivo CSV ya existe para agregar encabezado
+                java.io.File csvFile = new java.io.File(dir, fileName);
+                StringBuilder sb = new StringBuilder();
+                if (!csvFile.exists() || csvFile.length() == 0) {
+                    sb.append("idCita,paciente,correo,especialidad,fechaCita,sede,valor\n");
+                }
+
+                sb.append(String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
                         req.getIdCita(),
                         req.getPaciente(),
                         req.getCorreo(),
@@ -134,8 +142,8 @@ public class CitaIntegrationRoute extends RouteBuilder {
                         req.getFechaCita(),
                         req.getSede(),
                         req.getValor()
-                );
-                exchange.getIn().setBody(csvLine);
+                ));
+                exchange.getIn().setBody(sb.toString());
             })
             .to("file:" + dir + "?fileName=" + fileName + "&fileExist=Append")
             .log("Registro de cita escrito exitosamente en el archivo CSV de auditoría.");
