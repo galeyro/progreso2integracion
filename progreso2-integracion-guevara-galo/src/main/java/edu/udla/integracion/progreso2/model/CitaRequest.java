@@ -16,7 +16,7 @@ public class CitaRequest {
     @NotBlank(message = "El idCita no puede estar vacío")
     private String idCita;
 
-    @NotBlank(message = "El paciente no puede estar vacío")
+    @NotBlank(message = "El nombre del paciente no puede estar vacío")
     private String paciente;
 
     @NotBlank(message = "El correo no puede estar vacío")

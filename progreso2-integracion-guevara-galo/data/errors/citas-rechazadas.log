@@ -1,3 +1,9 @@
 [2026-06-03T20:17:56.259168300] | idCita=CITA-1001 | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=CitaRequest(idCita=CITA-1001, paciente=Ana Torres, correo=ana.torres@email.com, especialidad=Cardiología, fechaCita=2026-06-15, sede=Centro Norte, valor=45.5)
 [2026-06-03T20:21:03.604530700] | idCita=N/A | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=org.apache.camel.converter.stream.InputStreamCache@68c94d40
 [2026-06-03T20:21:05.652219400] | idCita=N/A | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=org.apache.camel.converter.stream.InputStreamCache@14dc2226
+[2026-06-03T20:22:29.753038200] | idCita=N/A | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=org.apache.camel.converter.stream.InputStreamCache@11d57d94
+[2026-06-03T20:22:31.781276300] | idCita=N/A | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=org.apache.camel.converter.stream.InputStreamCache@b70ac32
+[2026-06-03T20:23:56.005895100] | idCita=N/A | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=org.apache.camel.converter.stream.InputStreamCache@149eb199
+[2026-06-03T20:23:58.037001] | idCita=N/A | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=org.apache.camel.converter.stream.InputStreamCache@1a7b857d
+[2026-06-03T20:24:53.286232500] | idCita=CITA-1001 | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=CitaRequest(idCita=CITA-1001, paciente=Ana Torres, correo=ana.torres@email.com, especialidad=Cardiología, fechaCita=2026-06-15, sede=Centro Norte, valor=45.5)
+[2026-06-03T20:24:55.328400800] | idCita=CITA-1001 | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=CitaRequest(idCita=CITA-1001, paciente=Ana Torres, correo=ana.torres@email.com, especialidad=Cardiología, fechaCita=2026-06-15, sede=Centro Norte, valor=45.5)

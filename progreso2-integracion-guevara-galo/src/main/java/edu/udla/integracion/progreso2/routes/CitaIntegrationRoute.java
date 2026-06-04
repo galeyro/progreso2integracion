@@ -47,8 +47,10 @@ public class CitaIntegrationRoute extends RouteBuilder {
                 Exception cause = exchange.getProperty(org.apache.camel.Exchange.EXCEPTION_CAUGHT, Exception.class);
                 String exceptionMsg = cause != null ? cause.getMessage() : "Error desconocido";
 
-                // En multicast, el body original está disponible en la rama
-                Object bodyObj = exchange.getIn().getBody();
+                Object bodyObj = exchange.getProperty("originalRequest");
+                if (bodyObj == null) {
+                    bodyObj = exchange.getIn().getBody();
+                }
 
                 String payloadStr = bodyObj != null ? bodyObj.toString() : "null";
                 String idCita = "N/A";
@@ -70,7 +72,9 @@ public class CitaIntegrationRoute extends RouteBuilder {
         from("direct:startIntegration")
             .routeId("citaIntegrationRoute")
             .log("Procesando cita recibida: ${body}")
-            .setProperty("originalRequest", body())
+            .process(exchange -> {
+                exchange.setProperty("originalRequest", exchange.getIn().getBody());
+            })
             .multicast().shareUnitOfWork()
                 .to("direct:sendToBilling", "direct:sendToPubSub", "direct:writeToCsv")
             .end();
