@@ -1,122 +1,154 @@
 # Salud360 - Sistema de Integración de Citas Médicas
 
-Este proyecto implementa el backend y la arquitectura de integración para el sistema **Salud360**, encargándose del procesamiento asíncrono, la validación y distribución de citas médicas.
-
 ---
 
-## 1. Información del Estudiante
-* **Nombre**: Galo Guevara
-* **Materia**: Integración de Plataformas / Sistemas Distribuidos
+## 1. Nombre del Estudiante
+
+**Galo Guevara**  
+Materia: Integración de Plataformas / Sistemas Distribuidos
 
 ---
 
 ## 2. Descripción de la Solución
-**Salud360** es un sistema de integración que recibe solicitudes de citas médicas a través de una API REST de Spring Boot. Las solicitudes se validan sintácticamente (con Jakarta Bean Validation) y semánticamente (reglas de negocio en el servicio). Una vez aprobadas, se despachan de forma asíncrona hacia el motor de integración **Apache Camel 4**, el cual se encargará de:
-* Canalizar datos mediante colas **Point-to-Point** (ej. facturación).
-* Notificar mediante patrones **Publish/Subscribe** (ej. eventos de citas).
-* Persistir registros en archivos locales (**File Transfer**).
+
+**Salud360** es un sistema de integración que recibe solicitudes de citas médicas a través de una API REST construida con Spring Boot. Cada solicitud es validada en dos niveles: sintácticamente mediante Jakarta Bean Validation y semánticamente con reglas de negocio personalizadas. Una vez aprobada, la cita es despachada de forma asíncrona al motor de integración **Apache Camel 4**, el cual aplica tres patrones de integración empresarial en paralelo mediante el patrón **Multicast EIP**:
+
+- **Point-to-Point**: envía el comando de facturación a una cola dedicada en RabbitMQ.
+- **Publish/Subscribe**: publica el evento de cita en un exchange Fanout de RabbitMQ.
+- **File Transfer**: persiste el registro de la cita en un archivo CSV de auditoría.
+
+En caso de error en la capa de integración, Camel reintenta automáticamente hasta 2 veces y registra el fallo en un archivo de log estructurado.
 
 ---
 
 ## 3. Tecnologías Utilizadas
-* **Java 21**
-* **Spring Boot 4.0.6 / 3.x**
-* **Apache Camel 4** (`camel-spring-boot-starter`, `camel-spring-rabbitmq-starter`, `camel-jackson-starter`)
-* **RabbitMQ 3.12-management**
-* **Docker / Docker Compose**
-* **Lombok** & **Jakarta Validation API**
+
+| Tecnología | Versión | Uso |
+|---|---|---|
+| Java | 21 | Lenguaje principal |
+| Spring Boot | 4.0.6 | Framework base del backend |
+| Apache Camel | 4.20.0 | Motor de rutas de integración |
+| RabbitMQ | 3.12-management | Broker de mensajería |
+| Docker / Docker Compose | - | Gestión del contenedor de RabbitMQ |
+| SpringDoc OpenAPI | 3.0.3 | Documentación Swagger de la API |
+| Lombok | 1.18.x | Reducción de código boilerplate |
+| Jakarta Validation API | 3.x | Validación de campos en el request |
 
 ---
 
 ## 4. Instrucciones para Levantar RabbitMQ
-El entorno de mensajería se gestiona a través de Docker. En la raíz de la carpeta `progreso2-integracion-guevara-galo` se encuentra el archivo `docker-compose.yml`.
 
-Para iniciar el contenedor de RabbitMQ, ejecuta:
+El entorno de mensajería se gestiona con Docker Compose. El archivo `docker-compose.yml` se encuentra dentro de la carpeta del proyecto Maven.
+
 ```bash
 cd progreso2-integracion-guevara-galo
 docker compose up -d
 ```
 
-### Credenciales y Puertos de RabbitMQ:
-* **Host**: `localhost`
-* **Puerto AMQP (mensajería)**: `5672`
-* **Consola de Administración (Web UI)**: [http://localhost:15672](http://localhost:15672)
-* **Usuario**: `guest`
-* **Contraseña**: `guest`
+Verifica que el contenedor esté corriendo:
+
+```bash
+docker ps
+```
+
+### Acceso a la Consola de Administración
+
+| Parámetro | Valor |
+|---|---|
+| URL Web UI | http://localhost:15672 |
+| Puerto AMQP | 5672 |
+| Usuario | guest |
+| Contraseña | guest |
 
 ---
 
 ## 5. Instrucciones para Ejecutar la Aplicación
-Una vez que el contenedor de RabbitMQ esté corriendo:
 
-1. Ingresa a la carpeta del proyecto:
-   ```bash
-   cd progreso2-integracion-guevara-galo
-   ```
-2. Compila y ejecuta la aplicación de Spring Boot:
-   ```bash
-   ./mvnw spring-boot:run
-   ```
-La aplicación se levantará en el puerto **8080**.
+Con el contenedor de RabbitMQ activo, ejecuta desde la carpeta del proyecto:
+
+```bash
+cd progreso2-integracion-guevara-galo
+./mvnw spring-boot:run
+```
+
+La aplicación levantará en el puerto **8080**. Al iniciar, verás en consola:
+
+```
+Routes startup (total:4)
+    Started citaIntegrationRoute (direct://startIntegration)
+    Started billingSubRoute      (direct://sendToBilling)
+    Started pubSubSubRoute       (direct://sendToPubSub)
+    Started csvAuditSubRoute     (direct://writeToCsv)
+Apache Camel 4.20.0 started
+>> ¡Inicialización de RabbitMQ completada con éxito!
+```
+
+La **documentación Swagger** estará disponible en:  
+👉 **http://localhost:8080/swagger-ui/index.html**
 
 ---
 
-## 6. Endpoints Disponibles
+## 6. Endpoint Disponible
 
-### Crear Cita Médica
-* **Método**: `POST`
-* **URL**: `http://localhost:8080/api/citas`
-* **Headers**: `Content-Type: application/json`
+| Campo | Valor |
+|---|---|
+| Método | `POST` |
+| URL | `http://localhost:8080/api/citas` |
+| Content-Type | `application/json` |
+| Respuesta exitosa | `202 Accepted` |
+| Respuesta de error | `400 Bad Request` |
 
 ---
 
 ## 7. Ejemplo de Request Válido
-Una petición con todos los campos correctos y un `valor` numérico mayor a 0:
 
-**Cuerpo (JSON):**
+Request con todos los campos correctos y `valor` mayor a 0:
+
 ```json
 {
-  "idCita": "CITA-78923",
-  "paciente": "Galo Guevara",
-  "correo": "galo.guevara@udla.edu.ec",
-  "especialidad": "Pediatría",
-  "fechaCita": "2026-06-10 09:00",
-  "sede": "Sede UDLAPark",
-  "valor": 45.00
+  "idCita": "CITA-1001",
+  "paciente": "Ana Torres",
+  "correo": "ana.torres@email.com",
+  "especialidad": "Cardiología",
+  "fechaCita": "2026-06-15",
+  "sede": "Centro Norte",
+  "valor": 45.50
 }
 ```
 
-**Respuesta Esperada (HTTP 202 Accepted):**
+**Respuesta esperada — HTTP 202 Accepted:**
+
 ```json
 {
   "status": "Accepted",
   "message": "La cita ha sido recibida exitosamente y se encuentra en procesamiento.",
-  "idCita": "CITA-78923"
+  "idCita": "CITA-1001"
 }
 ```
 
 ---
 
 ## 8. Ejemplo de Request Inválido
-Una petición con formato de correo incorrecto, campos vacíos y valor de la cita igual o menor a 0:
 
-**Cuerpo (JSON):**
+Request con correo sin formato válido, campos vacíos y valor menor o igual a 0:
+
 ```json
 {
   "idCita": "",
   "paciente": "",
-  "correo": "correo_no_valido",
+  "correo": "correo-sin-formato",
   "especialidad": "Odontología",
-  "fechaCita": "2026-06-11 14:00",
+  "fechaCita": "2026-06-16",
   "sede": "",
-  "valor": -10.00
+  "valor": -5.00
 }
 ```
 
-**Respuesta Esperada (HTTP 400 Bad Request):**
+**Respuesta esperada — HTTP 400 Bad Request:**
+
 ```json
 {
-  "timestamp": "2026-06-03T19:46:10.123",
+  "timestamp": "2026-06-03T20:00:00.000",
   "status": 400,
   "error": "Bad Request",
   "errors": {
@@ -129,31 +161,95 @@ Una petición con formato de correo incorrecto, campos vacíos y valor de la cit
 }
 ```
 
+> La ruta de Apache Camel **no se invoca** ante un `400 Bad Request`. No habrá mensajes en RabbitMQ ni escrituras en el CSV.
+
 ---
 
-## 9. Arquitectura de Integración (Patrones Aplicados)
+## 9. Arquitectura de Integración — Patrones Aplicados
 
-### A. Point-to-Point (Punto a Punto)
-Se aplicará en la integración con el subsistema de facturación. Los datos de cobro de cada cita aprobada se enviarán de forma directa a la cola `billing.queue` de RabbitMQ. Cada mensaje representa una transacción que debe ser consumida y procesada exactamente por un solo receptor (el servicio de facturación).
+### A. Point-to-Point (Facturación)
 
-### B. Publish/Subscribe (Publicador/Suscriptor)
-Se aplicará para el envío de eventos de citas agendadas (`appointments.events`). Se publicará el evento en un exchange de RabbitMQ para que múltiples sistemas interesados (como el sistema de envío de correos, el recordatorio por SMS o la app móvil del paciente) puedan suscribirse de manera independiente a sus propias colas y reaccionar al evento.
+**Dónde se aplica:** Sub-ruta `billingSubRoute` en `CitaIntegrationRoute.java`.
+
+Cada cita aprobada genera un `BillingMessage` (con `idCita`, `paciente`, `especialidad`, `valor` y el tipo `COMANDO_FACTURAR_CITA`) que se serializa a JSON y se publica en el exchange `billing-exchange` con routing key `billing-routing-key`. Este mensaje es enrutado exclusivamente a la cola `billing.queue`, garantizando que **un único consumidor** (el sistema de facturación) lo procese.
+
+```
+CitaRequest → BillingMessage → billing-exchange → billing.queue
+```
+
+### B. Publish/Subscribe (Eventos de Citas)
+
+**Dónde se aplica:** Sub-ruta `pubSubSubRoute` en `CitaIntegrationRoute.java`.
+
+Cada cita confirmada genera un `AppointmentEvent` (con todos los campos del paciente y `tipoEvento: CITA_CONFIRMADA`) que se publica en el exchange `appointments.events` de tipo **Fanout**. Este exchange replica automáticamente el mensaje a **todos** los suscriptores vinculados: `notifications.queue` (sistema de notificaciones) y `analytics.queue` (sistema de analítica).
+
+```
+CitaRequest → AppointmentEvent → appointments.events (Fanout)
+                                        ├── notifications.queue
+                                        └── analytics.queue
+```
 
 ### C. Transferencia de Archivos (File Transfer)
-Se implementa la persistencia local de datos en el sistema de archivos:
-* **Auditoría**: Las citas válidas e integradas se formatean a CSV y se añaden al archivo `data/outbox/auditoria-citas.csv`.
-* **Rechazos**: Las citas que fallen alguna validación en las rutas se guardan en `data/errors/citas-rechazadas.log`.
+
+**Dónde se aplica:** Sub-ruta `csvAuditSubRoute` en `CitaIntegrationRoute.java`.
+
+Dos flujos de File Transfer conviven en la ruta:
+
+1. **Auditoría exitosa:** Cada cita integrada correctamente se escribe como línea CSV en `data/outbox/auditoria-citas.csv`. Si el archivo no existe, se genera automáticamente con fila de encabezado usando el EIP `choice()` de Camel.
+2. **Registro de rechazos:** Ante cualquier fallo en la integración, el bloque `onException` de Camel escribe una línea estructurada en `data/errors/citas-rechazadas.log` con timestamp, `idCita`, motivo y payload original.
+
+Ambos archivos usan el **componente File de Apache Camel** con `fileExist=Append`.
 
 ### D. Manejo de Errores
-El manejo de errores se ejecuta en dos niveles:
-1. **Filtro de Entrada (API REST)**: `GlobalExceptionHandler` captura los errores de esquema y formato HTTP devolviendo un estado `400 Bad Request` limpio.
-2. **Capa de Integración (Camel Route)**: Se definirá un bloque de manejo de excepciones (`onException(...)`) en Camel para capturar errores de procesamiento, enrutar la carga a la carpeta de errores `data/errors/citas-rechazadas.log` y asegurar que no se pierdan transacciones utilizando políticas de reintento.
+
+El sistema implementa manejo de errores en **dos niveles independientes**:
+
+**Nivel 1 — API REST (`GlobalExceptionHandler`):**  
+Intercepta errores de validación de esquema (`@Valid`) y reglas de negocio (`CitaValidationException`) antes de que el mensaje llegue a Camel. Devuelve un `400 Bad Request` con detalle de cada campo fallido. Apache Camel no es invocado.
+
+**Nivel 2 — Capa de Integración (`onException` en Camel):**  
+Si ocurre un error en cualquier sub-ruta (ej. RabbitMQ no disponible), Camel:
+1. Reintenta el envío hasta **2 veces** con 1 segundo de espera entre intentos (`maximumRedeliveries(2)`, `redeliveryDelay(1000)`).
+2. Si todos los reintentos fallan, captura la excepción, formatea una línea estructurada con timestamp/idCita/motivo/payload y la persiste en `data/errors/citas-rechazadas.log` mediante el componente File.
+3. Marca el Exchange como manejado (`.handled(true)`) para evitar propagación de excepciones sin tratar.
 
 ---
 
 ## 10. Evidencia Esperada para Verificar el Funcionamiento
-Para constatar la correcta implementación y flujo de integración, se debe verificar:
-1. **Consola de Spring Boot**: Se verá el log de Camel registrando cada entrada:
-   `[citaIntegrationRoute] Procesando cita recibida: CitaRequest(idCita=CITA-78923, paciente=Galo Guevara, ...)`
-2. **Consola Web de RabbitMQ**: Confirmación de la conexión del cliente y creación automática/manual de las colas y exchanges en `http://localhost:15672`.
-3. **Persistencia**: La creación/escritura de los registros en los directorios [data/outbox/](file:///c:/Users/G_Laptop/progreso2integracion/data/outbox) y [data/errors/](file:///c:/Users/G_Laptop/progreso2integracion/data/errors).
+
+### Escenario exitoso (Flujo Principal)
+
+**1. Consola de Spring Boot** — Se observan los logs de las 4 sub-rutas:
+```
+citaIntegrationRoute : Procesando cita recibida: CitaRequest(idCita=CITA-1001, ...)
+billingSubRoute      : Mensaje P2P de facturación enviado exitosamente a RabbitMQ.
+pubSubSubRoute       : Evento Pub/Sub publicado exitosamente a RabbitMQ.
+csvAuditSubRoute     : Registro de cita escrito exitosamente en el archivo CSV de auditoría.
+```
+
+**2. Consola Web de RabbitMQ** (`http://localhost:15672`):
+- Cola `billing.queue`: 1 mensaje con `"tipoMensaje": "COMANDO_FACTURAR_CITA"`.
+- Cola `notifications.queue`: 1 mensaje con `"tipoEvento": "CITA_CONFIRMADA"`.
+- Cola `analytics.queue`: el mismo mensaje que `notifications.queue`.
+
+**3. Archivo CSV de Auditoría** (`data/outbox/auditoria-citas.csv`):
+```
+idCita,paciente,correo,especialidad,fechaCita,sede,valor
+CITA-1001,Ana Torres,ana.torres@email.com,Cardiología,2026-06-15,Centro Norte,45.50
+```
+
+### Escenario de error (RabbitMQ apagado)
+
+**1. Respuesta HTTP**: `202 Accepted` inmediato (desacoplamiento asíncrono).
+
+**2. Consola**: Camel ejecuta 2 reintentos antes de registrar el fallo:
+```
+ERROR ... Error procesando cita: Connection refused: getsockopt
+```
+
+**3. Archivo de Log de Rechazos** (`data/errors/citas-rechazadas.log`):
+```
+[2026-06-03T20:17:56] | idCita=CITA-1001 | motivo=java.net.ConnectException: Connection refused: getsockopt | payload=CitaRequest(idCita=CITA-1001, ...)
+```
+
+Las capturas de pantalla de cada evidencia se encuentran en la carpeta `docs/capturas/`.
