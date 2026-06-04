@@ -124,17 +124,10 @@ public class CitaIntegrationRoute extends RouteBuilder {
         // =========================================================================
         from("direct:writeToCsv")
             .routeId("csvAuditSubRoute")
+            // Paso 1: Formatear la línea de datos CSV y guardarla en una propiedad
             .process(exchange -> {
                 CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
-
-                // Verificar si el archivo CSV ya existe para agregar encabezado
-                java.io.File csvFile = new java.io.File(dir, fileName);
-                StringBuilder sb = new StringBuilder();
-                if (!csvFile.exists() || csvFile.length() == 0) {
-                    sb.append("idCita,paciente,correo,especialidad,fechaCita,sede,valor\n");
-                }
-
-                sb.append(String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
+                String dataLine = String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
                         req.getIdCita(),
                         req.getPaciente(),
                         req.getCorreo(),
@@ -142,9 +135,22 @@ public class CitaIntegrationRoute extends RouteBuilder {
                         req.getFechaCita(),
                         req.getSede(),
                         req.getValor()
-                ));
-                exchange.getIn().setBody(sb.toString());
+                );
+                exchange.setProperty("csvDataLine", dataLine);
             })
+            // Paso 2: choice() EIP — si el archivo no existe o está vacío, incluir encabezado
+            .choice()
+                .when(exchange -> {
+                    java.io.File csvFile = new java.io.File(dir, fileName);
+                    return !csvFile.exists() || csvFile.length() == 0;
+                })
+                    .setBody(exchange ->
+                        "idCita,paciente,correo,especialidad,fechaCita,sede,valor\n"
+                        + exchange.getProperty("csvDataLine", String.class))
+                .otherwise()
+                    .setBody(exchange -> exchange.getProperty("csvDataLine", String.class))
+            .end()
+            // Paso 3: Escribir al archivo usando el componente File de Camel
             .to("file:" + dir + "?fileName=" + fileName + "&fileExist=Append")
             .log("Registro de cita escrito exitosamente en el archivo CSV de auditoría.");
     }
