@@ -70,6 +70,7 @@ public class CitaIntegrationRoute extends RouteBuilder {
         from("direct:startIntegration")
             .routeId("citaIntegrationRoute")
             .log("Procesando cita recibida: ${body}")
+            .setProperty("originalRequest", body())
             .multicast().shareUnitOfWork()
                 .to("direct:sendToBilling", "direct:sendToPubSub", "direct:writeToCsv")
             .end();
