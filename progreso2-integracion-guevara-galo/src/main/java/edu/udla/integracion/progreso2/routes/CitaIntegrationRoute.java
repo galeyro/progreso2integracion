@@ -1,157 +1,176 @@
 package edu.udla.integracion.progreso2.routes;
 
 import edu.udla.integracion.progreso2.model.AppointmentEvent;
-import edu.udla.integracion.progreso2.model.CitaRequest;
 import edu.udla.integracion.progreso2.model.BillingMessage;
-import org.apache.camel.model.dataformat.JsonLibrary;
+import edu.udla.integracion.progreso2.model.CitaRequest;
+import org.apache.camel.Exchange;
+import org.apache.camel.LoggingLevel;
+import org.apache.camel.Processor;
 import org.apache.camel.builder.RouteBuilder;
+import org.apache.camel.model.dataformat.JsonLibrary;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
+import java.time.LocalDateTime;
+import java.util.Locale;
+
+/**
+ * Ruta principal de integración para el sistema Salud360.
+ *
+ * Implementa tres patrones de integración empresarial (EIP) con Apache Camel:
+ *   - Multicast EIP:        orquesta el despacho paralelo a las tres sub-rutas.
+ *   - Point-to-Point (P2P): envía el comando de facturación a billing.queue.
+ *   - Publish/Subscribe:    publica el evento de cita en appointments.events (Fanout).
+ *   - File Transfer:        persiste el registro en auditoria-citas.csv.
+ *   - Error Handling:       captura excepciones, reintenta 2 veces y registra en citas-rechazadas.log.
+ */
 @Component
 public class CitaIntegrationRoute extends RouteBuilder {
 
-    @Value("${citas.path.auditoria-csv}")
-    private String auditoriaCsvPath;
+    @Value("${citas.outbox.dir}")
+    private String outboxDir;
 
-    @Value("${citas.path.rechazadas-log}")
-    private String rechazadasLogPath;
+    @Value("${citas.outbox.filename}")
+    private String outboxFilename;
+
+    @Value("${citas.errors.dir}")
+    private String errorsDir;
+
+    @Value("${citas.errors.filename}")
+    private String errorsFilename;
+
+    // =========================================================================
+    // Configuración de Rutas
+    // =========================================================================
 
     @Override
-    public void configure() throws Exception {
-        // Extraer directorio y nombre de archivo para el componente file de Camel
-        int lastSlash = auditoriaCsvPath.lastIndexOf('/');
-        if (lastSlash == -1) {
-            lastSlash = auditoriaCsvPath.lastIndexOf('\\');
-        }
-        String dir = lastSlash != -1 ? auditoriaCsvPath.substring(0, lastSlash) : "data/outbox";
-        String fileName = lastSlash != -1 ? auditoriaCsvPath.substring(lastSlash + 1) : "auditoria-citas.csv";
+    public void configure() {
 
-        // Extraer directorio y nombre de archivo para el log de errores
-        int lastSlashError = rechazadasLogPath.lastIndexOf('/');
-        if (lastSlashError == -1) {
-            lastSlashError = rechazadasLogPath.lastIndexOf('\\');
-        }
-        String errorDir = lastSlashError != -1 ? rechazadasLogPath.substring(0, lastSlashError) : "data/errors";
-        String errorFileName = lastSlashError != -1 ? rechazadasLogPath.substring(lastSlashError + 1) : "citas-rechazadas.log";
-
-        // =========================================================================
-        // RF5: Manejo básico de errores a nivel de Camel
-        // =========================================================================
+        // --- RF5: Manejo de Errores con Reintentos ---
         onException(Exception.class)
             .handled(true)
             .maximumRedeliveries(2)
             .redeliveryDelay(1000)
-            .log(org.apache.camel.LoggingLevel.ERROR, "Error procesando cita: ${exception.message}")
-            .process(exchange -> {
-                Exception cause = exchange.getProperty(org.apache.camel.Exchange.EXCEPTION_CAUGHT, Exception.class);
-                String exceptionMsg = cause != null ? cause.getMessage() : "Error desconocido";
+            .log(LoggingLevel.ERROR, "Error procesando cita: ${exception.message}")
+            .process(buildErrorLogProcessor())
+            .to("file:" + errorsDir + "?fileName=" + errorsFilename + "&fileExist=Append");
 
-                Object bodyObj = exchange.getProperty("originalRequest");
-                if (bodyObj == null) {
-                    bodyObj = exchange.getIn().getBody();
-                }
-
-                String payloadStr = bodyObj != null ? bodyObj.toString() : "null";
-                String idCita = "N/A";
-                if (bodyObj instanceof CitaRequest) {
-                    idCita = ((CitaRequest) bodyObj).getIdCita();
-                }
-
-                String timestamp = java.time.LocalDateTime.now().toString();
-                String errorLogLine = String.format("[%s] | idCita=%s | motivo=%s | payload=%s%n",
-                        timestamp, idCita, exceptionMsg, payloadStr);
-
-                exchange.getIn().setBody(errorLogLine);
-            })
-            .to("file:" + errorDir + "?fileName=" + errorFileName + "&fileExist=Append");
-
-        // =========================================================================
-        // Ruta Principal (Orquestación con Multicast EIP)
-        // =========================================================================
+        // --- Ruta Principal: Orquestación con Multicast EIP ---
         from("direct:startIntegration")
             .routeId("citaIntegrationRoute")
             .log("Procesando cita recibida: ${body}")
-            .process(exchange -> {
-                exchange.setProperty("originalRequest", exchange.getIn().getBody());
-            })
+            .process(exchange -> exchange.setProperty("originalRequest", exchange.getIn().getBody()))
             .multicast().shareUnitOfWork()
                 .to("direct:sendToBilling", "direct:sendToPubSub", "direct:writeToCsv")
             .end();
 
-        // =========================================================================
-        // RF2: Sub-ruta para Facturación (Point-to-Point)
-        // =========================================================================
+        // --- RF2: Sub-ruta Point-to-Point (Facturación) ---
         from("direct:sendToBilling")
             .routeId("billingSubRoute")
-            .process(exchange -> {
-                CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
-                BillingMessage billing = BillingMessage.builder()
-                        .idCita(req.getIdCita())
-                        .paciente(req.getPaciente())
-                        .especialidad(req.getEspecialidad())
-                        .valor(req.getValor())
-                        .build();
-                exchange.getIn().setBody(billing);
-            })
+            .process(buildBillingProcessor())
             .marshal().json(JsonLibrary.Jackson)
             .to("spring-rabbitmq:billing-exchange?routingKey=billing-routing-key")
             .log("Mensaje P2P de facturación enviado exitosamente a RabbitMQ.");
 
-        // =========================================================================
-        // RF3: Sub-ruta para Eventos (Publish/Subscribe)
-        // =========================================================================
+        // --- RF3: Sub-ruta Publish/Subscribe (Eventos de Citas) ---
         from("direct:sendToPubSub")
             .routeId("pubSubSubRoute")
-            .process(exchange -> {
-                CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
-                AppointmentEvent event = AppointmentEvent.builder()
-                        .idCita(req.getIdCita())
-                        .paciente(req.getPaciente())
-                        .correo(req.getCorreo())
-                        .especialidad(req.getEspecialidad())
-                        .fechaCita(req.getFechaCita())
-                        .sede(req.getSede())
-                        .build();
-                exchange.getIn().setBody(event);
-            })
+            .process(buildAppointmentEventProcessor())
             .marshal().json(JsonLibrary.Jackson)
             .to("spring-rabbitmq:appointments.events")
             .log("Evento Pub/Sub publicado exitosamente a RabbitMQ.");
 
-        // =========================================================================
-        // RF4: Sub-ruta para Auditoría en Archivo CSV (File Transfer)
-        // =========================================================================
+        // --- RF4: Sub-ruta File Transfer (CSV de Auditoría) ---
         from("direct:writeToCsv")
             .routeId("csvAuditSubRoute")
-            // Paso 1: Formatear la línea de datos CSV y guardarla en una propiedad
-            .process(exchange -> {
-                CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
-                String dataLine = String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
-                        req.getIdCita(),
-                        req.getPaciente(),
-                        req.getCorreo(),
-                        req.getEspecialidad(),
-                        req.getFechaCita(),
-                        req.getSede(),
-                        req.getValor()
-                );
-                exchange.setProperty("csvDataLine", dataLine);
-            })
-            // Paso 2: choice() EIP — si el archivo no existe o está vacío, incluir encabezado
+            .process(buildCsvLineProcessor())
             .choice()
                 .when(exchange -> {
-                    java.io.File csvFile = new java.io.File(dir, fileName);
+                    File csvFile = new File(outboxDir, outboxFilename);
                     return !csvFile.exists() || csvFile.length() == 0;
                 })
-                    .setBody(exchange ->
-                        "idCita,paciente,correo,especialidad,fechaCita,sede,valor\n"
-                        + exchange.getProperty("csvDataLine", String.class))
+                    .setBody(exchange -> "idCita,paciente,correo,especialidad,fechaCita,sede,valor\n"
+                            + exchange.getProperty("csvDataLine", String.class))
                 .otherwise()
                     .setBody(exchange -> exchange.getProperty("csvDataLine", String.class))
             .end()
-            // Paso 3: Escribir al archivo usando el componente File de Camel
-            .to("file:" + dir + "?fileName=" + fileName + "&fileExist=Append")
+            .to("file:" + outboxDir + "?fileName=" + outboxFilename + "&fileExist=Append")
             .log("Registro de cita escrito exitosamente en el archivo CSV de auditoría.");
+    }
+
+    // =========================================================================
+    // Processors — Transformaciones de Mensajes
+    // =========================================================================
+
+    /**
+     * RF2: Transforma CitaRequest → BillingMessage para el canal Point-to-Point.
+     */
+    private Processor buildBillingProcessor() {
+        return exchange -> {
+            CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
+            BillingMessage billing = BillingMessage.builder()
+                    .idCita(req.getIdCita())
+                    .paciente(req.getPaciente())
+                    .especialidad(req.getEspecialidad())
+                    .valor(req.getValor())
+                    .build();
+            exchange.getIn().setBody(billing);
+        };
+    }
+
+    /**
+     * RF3: Transforma CitaRequest → AppointmentEvent para el canal Publish/Subscribe.
+     */
+    private Processor buildAppointmentEventProcessor() {
+        return exchange -> {
+            CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
+            AppointmentEvent event = AppointmentEvent.builder()
+                    .idCita(req.getIdCita())
+                    .paciente(req.getPaciente())
+                    .correo(req.getCorreo())
+                    .especialidad(req.getEspecialidad())
+                    .fechaCita(req.getFechaCita())
+                    .sede(req.getSede())
+                    .build();
+            exchange.getIn().setBody(event);
+        };
+    }
+
+    /**
+     * RF4: Formatea CitaRequest como línea CSV y la guarda en una propiedad del Exchange.
+     * El EIP choice() decide si anteponer el encabezado.
+     */
+    private Processor buildCsvLineProcessor() {
+        return exchange -> {
+            CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
+            String dataLine = String.format(Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
+                    req.getIdCita(), req.getPaciente(), req.getCorreo(),
+                    req.getEspecialidad(), req.getFechaCita(), req.getSede(), req.getValor());
+            exchange.setProperty("csvDataLine", dataLine);
+        };
+    }
+
+    /**
+     * RF5: Construye la línea estructurada del log de errores a partir del Exchange.
+     */
+    private Processor buildErrorLogProcessor() {
+        return exchange -> {
+            Exception cause = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
+            String exceptionMsg = cause != null ? cause.getMessage() : "Error desconocido";
+
+            Object bodyObj = exchange.getProperty("originalRequest");
+            if (bodyObj == null) {
+                bodyObj = exchange.getIn().getBody();
+            }
+
+            String idCita = (bodyObj instanceof CitaRequest req) ? req.getIdCita() : "N/A";
+            String payload = bodyObj != null ? bodyObj.toString() : "null";
+
+            String errorLine = String.format("[%s] | idCita=%s | motivo=%s | payload=%s%n",
+                    LocalDateTime.now(), idCita, exceptionMsg, payload);
+
+            exchange.getIn().setBody(errorLine);
+        };
     }
 }
