@@ -47,10 +47,8 @@ public class CitaIntegrationRoute extends RouteBuilder {
                 Exception cause = exchange.getProperty(org.apache.camel.Exchange.EXCEPTION_CAUGHT, Exception.class);
                 String exceptionMsg = cause != null ? cause.getMessage() : "Error desconocido";
 
-                Object bodyObj = exchange.getProperty("originalRequest");
-                if (bodyObj == null) {
-                    bodyObj = exchange.getIn().getBody();
-                }
+                // En multicast, el body original está disponible en la rama
+                Object bodyObj = exchange.getIn().getBody();
 
                 String payloadStr = bodyObj != null ? bodyObj.toString() : "null";
                 String idCita = "N/A";
@@ -66,16 +64,21 @@ public class CitaIntegrationRoute extends RouteBuilder {
             })
             .to("file:" + errorDir + "?fileName=" + errorFileName + "&fileExist=Append");
 
+        // =========================================================================
+        // Ruta Principal (Orquestación con Multicast EIP)
+        // =========================================================================
         from("direct:startIntegration")
             .routeId("citaIntegrationRoute")
             .log("Procesando cita recibida: ${body}")
+            .multicast().shareUnitOfWork()
+                .to("direct:sendToBilling", "direct:sendToPubSub", "direct:writeToCsv")
+            .end();
 
-            // Guardar el objeto CitaRequest original en las propiedades del exchange
-            .setProperty("originalRequest", body())
-
-            // =========================================================================
-            // RF2: Integración con sistema de facturación usando Point-to-Point
-            // =========================================================================
+        // =========================================================================
+        // RF2: Sub-ruta para Facturación (Point-to-Point)
+        // =========================================================================
+        from("direct:sendToBilling")
+            .routeId("billingSubRoute")
             .process(exchange -> {
                 CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
                 BillingMessage billing = BillingMessage.builder()
@@ -88,14 +91,13 @@ public class CitaIntegrationRoute extends RouteBuilder {
             })
             .marshal().json(JsonLibrary.Jackson)
             .to("spring-rabbitmq:billing-exchange?routingKey=billing-routing-key")
-            .log("Mensaje P2P de facturación enviado exitosamente a RabbitMQ.")
+            .log("Mensaje P2P de facturación enviado exitosamente a RabbitMQ.");
 
-            // Restaurar el payload original en el body para las siguientes etapas
-            .setBody(exchangeProperty("originalRequest"))
-
-            // =========================================================================
-            // RF3: Distribución de evento usando Publish/Subscribe
-            // =========================================================================
+        // =========================================================================
+        // RF3: Sub-ruta para Eventos (Publish/Subscribe)
+        // =========================================================================
+        from("direct:sendToPubSub")
+            .routeId("pubSubSubRoute")
             .process(exchange -> {
                 CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
                 AppointmentEvent event = AppointmentEvent.builder()
@@ -110,14 +112,13 @@ public class CitaIntegrationRoute extends RouteBuilder {
             })
             .marshal().json(JsonLibrary.Jackson)
             .to("spring-rabbitmq:appointments.events")
-            .log("Evento Pub/Sub publicado exitosamente a RabbitMQ.")
+            .log("Evento Pub/Sub publicado exitosamente a RabbitMQ.");
 
-            // Restaurar el payload original en el body para las siguientes etapas
-            .setBody(exchangeProperty("originalRequest"))
-
-            // =========================================================================
-            // RF4: Integración con sistema legado mediante archivo CSV
-            // =========================================================================
+        // =========================================================================
+        // RF4: Sub-ruta para Auditoría en Archivo CSV (File Transfer)
+        // =========================================================================
+        from("direct:writeToCsv")
+            .routeId("csvAuditSubRoute")
             .process(exchange -> {
                 CitaRequest req = exchange.getIn().getBody(CitaRequest.class);
                 String csvLine = String.format(java.util.Locale.US, "%s,%s,%s,%s,%s,%s,%.2f%n",
@@ -132,8 +133,6 @@ public class CitaIntegrationRoute extends RouteBuilder {
                 exchange.getIn().setBody(csvLine);
             })
             .to("file:" + dir + "?fileName=" + fileName + "&fileExist=Append")
-            .log("Registro de cita escrito exitosamente en el archivo CSV de auditoría.")
-
-            .end();
+            .log("Registro de cita escrito exitosamente en el archivo CSV de auditoría.");
     }
 }
